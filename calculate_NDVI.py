@@ -5,18 +5,14 @@
 # Student Number:
 # -----------------------------------------------------------------------------------------------------------------------------
 # Code
-# Program: calculate_ndvi.py
-# Description: Processes blue-filtered NoIR images to extract an NDVI proxy 
-#              and generates a grayscale intensity map for thresholding.
-
 import cv2
 import numpy as np
 
-def process_ndvi(input_path, output_path):
-    print(f"Processing {input_path}...")
-    img = cv2.imread(input_path)
+def processNDVI(inputPath, outputPath):
+    print(f"Processing: {inputPath}...")
+    img = cv2.imread(inputPath)
     if img is None:
-        print(f"Failed to load {input_path}!")
+        print(f"Failed to load: {inputPath}!")
         return
 
     #Split the channels to blue, green and red
@@ -30,14 +26,14 @@ def process_ndvi(input_path, output_path):
     ndvi = numerator / denominator
 
     #Normalise the data. 
-    ndvi_normalized = ((ndvi + 1) / 2) * 255
+    ndviNormalided = ((ndvi + 1) / 2) * 255
     
     #Conversion to 8-bit int
-    ndvi_8bit = ndvi_normalized.astype(np.uint8)
+    ndvi8bit = ndviNormalized.astype(np.uint8)
 
     #Save greyscale heatmap
-    cv2.imwrite(output_path, ndvi_8bit)
-    print(f"Saved output to {output_path}\n")
+    cv2.imwrite(outputpath, ndvi8bit)
+    print(f"Saved output to {outputPath}\n")
 process_ndvi("blue_filter1.jpg", "ndvi_map1.jpg")
 process_ndvi("blue_filter2.jpg", "ndvi_map2.jpg")
 process_ndvi("blue_filter3.jpg", "ndvi_map3.jpg")
