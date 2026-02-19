@@ -5,10 +5,6 @@
 # Student Number:
 # -----------------------------------------------------------------------------------------------------------------------------
 # Code
-# Program: salvage_data.py
-# Description: Uses Min-Max Normalization to recover NDVI signals 
-#              from AWB-corrupted static JPG images.
-
 import cv2
 import numpy as np
 
