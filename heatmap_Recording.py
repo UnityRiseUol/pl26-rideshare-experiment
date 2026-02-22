@@ -10,17 +10,18 @@ import numpy as np
 from picamera2 import Picamera2
 import time
 
-print("Initializing Telemetry and Heatmap Payload...")
+print("Initialising Telemetry and Heatmap Payload...")
 
+#Configuration
 picam2 = Picamera2()
 config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "BGR888"})
 picam2.configure(config)
-
 picam2.set_controls({"AwbEnable": False, "ColourGains": (1.0, 1.0)})
 picam2.start()
 
+#Video codec writer
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter("calibrated_flight_data.mp4", fourcc, 10.0, (640, 480))
+output = cv2.VideoWriter("calibrated_flight_data.mp4", fourcc, 10.0, (640, 480))
 print("Recording Calibrated Heatmap Video...")
 
 duration = 30
@@ -31,6 +32,7 @@ try:
     while (time.time() - start_time) < duration:
         frame = picam2.capture_array()
         
+        #Slice padding
         if frame.shape[2] == 4:
             frame = frame[:, :, :3].copy()
             
@@ -48,7 +50,7 @@ try:
         #Apply the Jet colourmap heatmap
         heatmap = cv2.applyColorMap(heatmap_data, cv2.COLORMAP_JET)
         
-        out.write(heatmap)
+        output.write(heatmap)
         frame_count = frame_count + 1
         
         if frame_count % 10 == 0:
@@ -62,6 +64,6 @@ except KeyboardInterrupt:
     print("\nRecording aborted by user.")
 
 finally:
-    out.release()
+    output.release()
     picam2.stop()
     print(f"Payload Shut Down. Saved {frame_count} frames to calibrated_flight_data.mp4")
