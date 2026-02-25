@@ -9,86 +9,102 @@ import cv2
 import numpy as np
 from picamera2 import Picamera2
 import time
-print("Intialising VEGA...")
 
-#Configuration
+print("Initialising VEGA Hybrid Payload...")
+print("Combining Heatmap Visualisation with CV Classification...")
+
+#Configuration 
 picam2 = Picamera2()
 config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "BGR888"})
 picam2.configure(config)
 picam2.set_controls({"AwbEnable": False, "ColourGains": (1.0, 1.0)})
 picam2.start()
 
-#Video codec writer
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter("VEGA.mp4", fourcc, 10.0, (640, 480))
-print("Recording started...")
+output = cv2.VideoWriter("VEGA.mp4", fourcc, 10.0, (640, 480))
+print("Recording Started...")
 
-duration = 60
+duration = 60 
 start_time = time.time()
 frame_count = 0
 
 try:
     while (time.time() - start_time) < duration:
         frame = picam2.capture_array()
-        #Slice padding
         if frame.shape[2] == 4:
             frame = frame[:, :, :3].copy()
             
         b, g, r = cv2.split(frame)
         r = r.astype(float)
         b = b.astype(float)
-
-        denominator = r + b
-        #If pixel is dark dirt/shadow (< 60) then force the NDVI to -1.0 so it is completely ignored
-        ndvi = np.where(denominator > 60, (r - b) / (denominator + 1e-5), -1.0)
         
-        scaledNDVI = (ndvi - (-0.20)) / (0.00 - (-0.20)) * 255
-        heatmapData = np.clip(scaledNDVI, 0, 255).astype(np.uint8)
-
-        #Healthy mask
-        healthyMask = cv2.inRange(heatmapData, 60, 140)
+        #Calculate raw NDVI
+        ndvi_raw = (r - b) / ((r + b) + 1e-5)
         
-        #Not healthy mask
-        notHealthyMask = cv2.inRange(heatmapData, 141, 255)
-
-        #Draw green boxes for healthy plants
-        contoursHealthy, _ = cv2.findContours(healthyMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for count in contoursHealthy:
+        #Scaling NDVI
+        scaled_ndvi = (ndvi_raw - (-0.30)) / (0.05 - (-0.30)) * 255
+        
+        # Clip values to stay within 0-255 and convert to 8-bit integer for image processing
+        analysis_layer = np.clip(scaled_ndvi, 0, 255).astype(np.uint8)
+        
+        #Apply the Jet Colormap to turn the grayscale math into a visual heatmap.
+        #Blue = Low NDVI, Green/Yellow = Mid NDVI, Red = High NDVI.
+        visual_heatmap = cv2.applyColorMap(analysis_layer, cv2.COLORMAP_JET)
+        
+        #Thresholds based on calibration:
+        #0-79: Background noise (ignored)
+        #80-159: "Not Healthy" / Dormant / Weak Signal
+        #160-255: "Healthy" / Strongest Signal
+        
+        mask_not_healthy = cv2.inRange(analysis_layer, 80, 159)
+        mask_healthy = cv2.inRange(analysis_layer, 160, 255)
+        
+        #Not healthy plants
+        contours_red, _ = cv2.findContours(mask_not_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for count in contours_red:
             area = cv2.contourArea(count)
-            # Increased noise filter slightly to ignore tiny pebbles
-            if area > 150: 
-                x, y, width, height = cv2.boundingRect(count)
-                if (float(height)/float(width)) < 3.0:
-                    cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 255, 0), 2)
-                    cv2.putText(frame, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if area > 200:
+                x, y, w, h = cv2.boundingRect(count)
+                if (float(h)/float(w)) < 4.0:
+                    #Draw Red rectangle onto the visual heatmap
+                    cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                    cv2.putText(visual_heatmap, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
-        #Draw red boxes for not healthy targets
-        contoursNotHealthy, _ = cv2.findContours(notHealthyMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for count in contoursNotHealthy:
+        #Healthy plants
+        contours_green, _ = cv2.findContours(mask_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for count in contours_green:
             area = cv2.contourArea(count)
-            if area > 150:
-                x, y, width, height = cv2.boundingRect(count)
-                if (float(height)/float(width)) < 3.0:
-                    cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 0, 255), 2)
-                    cv2.putText(frame, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            if area > 200:
+                x, y, w, h = cv2.boundingRect(count)
+                if (float(h)/float(w)) < 4.0:
+                    #Draw Green rectangle onto the visual heatmap
+                    cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    cv2.putText(visual_heatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-        #Write frame and count
-        out.write(frame)
+        #Heads Up Display to show live scientific telemetry onto the video for post-flight analysis.
+        elapsed = int(time.time() - start_time)
+        mean_val = ndvi_raw.mean()
+        
+        #Semi-transparent background box for text clarity
+        overlay = visual_heatmap.copy()
+        cv2.rectangle(overlay, (0, 0), (640, 30), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, visual_heatmap, 0.5, 0, visual_heatmap)
+        
+        status_text = f"VEGA PAYLOAD | T+{elapsed}s | Avg NDVI: {mean_val:.4f}"
+        cv2.putText(visual_heatmap, status_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        #Save frame
+        output.write(visual_heatmap)
         frame_count += 1
         
-        if frame_count % 10 == 0:
-            elapsed = int(time.time() - start_time)
-            # Filter out the dirt we ignored before calculating the terminal averages
-            valid_ndvi = ndvi[ndvi > -1.0]
-            if len(valid_ndvi) > 0:
-                max_val = valid_ndvi.max()
-                mean_val = valid_ndvi.mean()
-                print(f"Recording... {elapsed}/{duration}s | Max NDVI: {max_val:.3f} | Avg NDVI: {mean_val:.3f}")
+        if frame_count % 20 == 0:
+            print(f"Recording... {elapsed}/{duration}s processed.")
 
 except KeyboardInterrupt:
-    print("\nRecording stopped!")
+    print("\nRecording aborted by user.")
 
 finally:
-    out.release()
+
+    output.release()
     picam2.stop()
-    print(f"VEGA Stopped! Saved {frame_count} frames to VEGA.mp4")
+    print(f"VEGA stopped! VEGA.mp4 saved with {frame_count} frames.")
