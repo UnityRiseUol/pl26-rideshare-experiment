@@ -40,7 +40,7 @@ try:
         
         #Brightness Filter
         denominator = r + b
-        # Ignore dark pixels (dirt/shadows) by forcing them to -1.0
+        #Ignore dark pixels (dirt/shadows) by forcing them to -1.0
         ndvi_raw = np.where(denominator > 60, (r - b) / (denominator + 1e-5), -1.0)
         
         #Scaling NDVI
@@ -83,7 +83,7 @@ try:
         #Heads Up Display to show live scientific telemetry
         elapsed = int(time.time() - start_time)
         
-        # Only calculate the mean for valid data (ignoring the dirt we filtered out)
+        #Only calculate the mean for valid data so we ignore dirt
         valid_ndvi = ndvi_raw[ndvi_raw > -1.0]
         mean_val = valid_ndvi.mean() if len(valid_ndvi) > 0 else 0.0
         
@@ -97,7 +97,7 @@ try:
 
         #Save frame
         output.write(visual_heatmap)
-        frame_count += 1
+        frame_count = frame_count + 1
         
         if frame_count % 20 == 0:
             print(f"Recording... {elapsed}/{duration}s processed.")
