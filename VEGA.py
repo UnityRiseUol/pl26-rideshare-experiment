@@ -38,8 +38,10 @@ try:
         r = r.astype(float)
         b = b.astype(float)
         
-        #Calculate raw NDVI
-        ndvi_raw = (r - b) / ((r + b) + 1e-5)
+        #Brightness Filter
+        denominator = r + b
+        # Ignore dark pixels (dirt/shadows) by forcing them to -1.0
+        ndvi_raw = np.where(denominator > 60, (r - b) / (denominator + 1e-5), -1.0)
         
         #Scaling NDVI
         scaled_ndvi = (ndvi_raw - (-0.30)) / (0.05 - (-0.30)) * 255
@@ -48,42 +50,42 @@ try:
         analysis_layer = np.clip(scaled_ndvi, 0, 255).astype(np.uint8)
         
         #Apply the Jet Colormap to turn the grayscale math into a visual heatmap.
-        #Blue = Low NDVI, Green/Yellow = Mid NDVI, Red = High NDVI.
         visual_heatmap = cv2.applyColorMap(analysis_layer, cv2.COLORMAP_JET)
         
-        #Thresholds based on calibration:
-        #0-79: Background noise (ignored)
-        #80-159: "Not Healthy" / Dormant / Weak Signal
-        #160-255: "Healthy" / Strongest Signal
+        #Threshold
+        # 0-50: Background noise/dirt (Ignored)
+        # 51-135: "Healthy" (Glossy leaves reflecting blue sky -> Cyan/Light Blue on heatmap)
+        # 136-255: "Not Healthy" (Matte dead leaves/wood -> Yellow/Orange on heatmap)
         
-        mask_not_healthy = cv2.inRange(analysis_layer, 80, 159)
-        mask_healthy = cv2.inRange(analysis_layer, 160, 255)
+        mask_healthy = cv2.inRange(analysis_layer, 51, 135)
+        mask_not_healthy = cv2.inRange(analysis_layer, 136, 255)
         
-        #Not healthy plants
+        #Not Healthy
         contours_red, _ = cv2.findContours(mask_not_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_red:
             area = cv2.contourArea(count)
             if area > 200:
                 x, y, w, h = cv2.boundingRect(count)
                 if (float(h)/float(w)) < 4.0:
-                    #Draw Red rectangle onto the visual heatmap
                     cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 0, 255), 2)
                     cv2.putText(visual_heatmap, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
-        #Healthy plants
+        #Healthy plant
         contours_green, _ = cv2.findContours(mask_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_green:
             area = cv2.contourArea(count)
             if area > 200:
                 x, y, w, h = cv2.boundingRect(count)
                 if (float(h)/float(w)) < 4.0:
-                    #Draw Green rectangle onto the visual heatmap
                     cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     cv2.putText(visual_heatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-        #Heads Up Display to show live scientific telemetry onto the video for post-flight analysis.
+        #Heads Up Display to show live scientific telemetry
         elapsed = int(time.time() - start_time)
-        mean_val = ndvi_raw.mean()
+        
+        # Only calculate the mean for valid data (ignoring the dirt we filtered out)
+        valid_ndvi = ndvi_raw[ndvi_raw > -1.0]
+        mean_val = valid_ndvi.mean() if len(valid_ndvi) > 0 else 0.0
         
         #Semi-transparent background box for text clarity
         overlay = visual_heatmap.copy()
@@ -104,7 +106,6 @@ except KeyboardInterrupt:
     print("\nRecording aborted by user.")
 
 finally:
-
     output.release()
     picam2.stop()
     print(f"VEGA stopped! VEGA.mp4 saved with {frame_count} frames.")
