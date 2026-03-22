@@ -11,7 +11,7 @@ import time
 import psutil
 import csv 
 
-print("Initialising VEGA Rideshare Experiment...")
+print("Initialising VEGA Auto-Calibrating Aerial Payload...")
 
 #Configuration 
 picam2 = Picamera2()
@@ -60,41 +60,42 @@ try:
         else:
             dynamic_min, dynamic_max = -0.30, 0.05
             
-        #Dynamically scale the data based on the live environment bounds
+        #Dynamically scale the data based on the Live environment bounds
         scaled_ndvi = (ndvi_raw - dynamic_min) / (dynamic_max - dynamic_min) * 255
         analysis_layer = np.clip(scaled_ndvi, 0, 255).astype(np.uint8)
         
         #Apply the Jet Colormap
         visual_heatmap = cv2.applyColorMap(analysis_layer, cv2.COLORMAP_JET)
 
-        #Macro Area Masks
-        #Based on visual flight data: Grass = Cyan/Green. Mud/Cars = Orange/Red.
-        mask_healthy = cv2.inRange(analysis_layer, 30, 140)
-        mask_not_healthy = cv2.inRange(analysis_layer, 141, 255) 
+        #Lock Aerial Mask
+        mask_healthy = cv2.inRange(analysis_layer, 30, 110)
+        mask_not_healthy = cv2.inRange(analysis_layer, 111, 240) 
         
-        #Not Healthy (Red Boxes - targeting Mud and Cars)
+        #Topographical Tracing
+        #Not Healthy (Red Topographical Outlines)
         contours_red, _ = cv2.findContours(mask_not_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_red:
             area = cv2.contourArea(count)
-            if 100 < area < 250000:
+            if area > 800: # Ignore tiny noise speckles
+                #Draw topgraphocal border around the shape the mud/concrete
+                cv2.drawContours(visual_heatmap, [count], -1, (0, 0, 255), 2)
                 x, y, w, h = cv2.boundingRect(count)
-                if (float(h)/float(w)) < 4.0:
-                    cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                    cv2.putText(visual_heatmap, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                cv2.putText(visual_heatmap, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
-        #Healthy plant (Green Boxes - targeting the massive lawn)
+        #Healthy plant (Green Topographical Outlines)
         contours_green, _ = cv2.findContours(mask_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_green:
             area = cv2.contourArea(count)
-            if 100 < area < 250000:
+            if area > 800:
+                #Draw topographical border around the shape of the grass
+                cv2.drawContours(visual_heatmap, [count], -1, (0, 255, 0), 2)
                 x, y, w, h = cv2.boundingRect(count)
-                if (float(h)/float(w)) < 4.0:
-                    cv2.rectangle(visual_heatmap, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    cv2.putText(visual_heatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                cv2.putText(visual_heatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
         #HUD
         elapsed = int(time.time() - start_time)
         mean_val = valid_ndvi.mean() if len(valid_ndvi) > 0 else 0.0
+        
         cpu_usage = psutil.cpu_percent()
         ram_usage = psutil.virtual_memory().percent
         overlay = visual_heatmap.copy()
@@ -111,7 +112,6 @@ try:
         cal_text = f"Live Sensor Calibration: [{dynamic_min:.3f} to {dynamic_max:.3f}]"
         cv2.putText(visual_heatmap, cal_text, (10, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
         
-        #Real-Time Frame Sync
         elapsed_exact = time.time() - start_time
         expected_frames = int(elapsed_exact * target_fps)
         
