@@ -11,7 +11,7 @@ import time
 import psutil
 import csv 
 
-print("Initialising VEGA Auto-Calibrating Aerial Payload...")
+print("Initialising VEGA Rideshare Experiment...")
 
 #Configuration 
 picam2 = Picamera2()
@@ -33,6 +33,9 @@ print(f"Recording Started... Strictly synced to {target_fps} FPS for real-time p
 duration = 60 
 start_time = time.time()
 frame_count = 0
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+smooth_min = None
+smooth_max = None
 
 try:
     while (time.time() - start_time) < duration:
@@ -49,35 +52,50 @@ try:
         valid_pixels = (denominator > 60) & (r < 240) & (b < 240)
         ndvi_raw = np.where(valid_pixels, (r - b) / (denominator + 1e-5), -1.0)
         
-        #Auto-Calibration Engine
+        #Auto-Calibration
         valid_ndvi = ndvi_raw[valid_pixels]
         
         if len(valid_ndvi) > 1000:
-            dynamic_min = np.percentile(valid_ndvi, 5)
-            dynamic_max = np.percentile(valid_ndvi, 95)
-            if dynamic_max <= dynamic_min:
-                dynamic_max = dynamic_min + 0.01
+            current_min = np.percentile(valid_ndvi, 5)
+            current_max = np.percentile(valid_ndvi, 95)
+            if current_max <= current_min:
+                current_max = current_min + 0.01
         else:
-            dynamic_min, dynamic_max = -0.30, 0.05
+            current_min, current_max = -0.30, 0.05
             
-        #Dynamically scale the data based on the Live environment bounds
-        scaled_ndvi = (ndvi_raw - dynamic_min) / (dynamic_max - dynamic_min) * 255
+        #Temporal Smoothing
+        if smooth_min is None:
+
+            smooth_min = current_min
+            smooth_max = current_max
+        else:
+            #Glide smoothly between frame 90% previous data + 10% new data
+            smooth_min = (0.9 * smooth_min) + (0.1 * current_min)
+            smooth_max = (0.9 * smooth_max) + (0.1 * current_max)
+            
+        #Dynamically scale the data based on the smoothed bounds
+        scaled_ndvi = (ndvi_raw - smooth_min) / (smooth_max - smooth_min) * 255
         analysis_layer = np.clip(scaled_ndvi, 0, 255).astype(np.uint8)
         
         #Apply the Jet Colormap
         visual_heatmap = cv2.applyColorMap(analysis_layer, cv2.COLORMAP_JET)
 
-        #Lock Aerial Mask
-        mask_healthy = cv2.inRange(analysis_layer, 30, 110)
-        mask_not_healthy = cv2.inRange(analysis_layer, 111, 240) 
+        #Aerial Masks
+        mask_healthy = cv2.inRange(analysis_layer, 45, 140)
+        mask_not_healthy = cv2.inRange(analysis_layer, 141, 255) 
         
-        #Topographical Tracing
+        #Morphological Smoothing
+        mask_healthy = cv2.morphologyEx(mask_healthy, cv2.MORPH_OPEN, kernel)
+        mask_healthy = cv2.morphologyEx(mask_healthy, cv2.MORPH_CLOSE, kernel)
+        
+        mask_not_healthy = cv2.morphologyEx(mask_not_healthy, cv2.MORPH_OPEN, kernel)
+        mask_not_healthy = cv2.morphologyEx(mask_not_healthy, cv2.MORPH_CLOSE, kernel)
+
         #Not Healthy (Red Topographical Outlines)
         contours_red, _ = cv2.findContours(mask_not_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_red:
             area = cv2.contourArea(count)
-            if area > 800: # Ignore tiny noise speckles
-                #Draw topgraphocal border around the shape the mud/concrete
+            if 2000 < area < 250000: 
                 cv2.drawContours(visual_heatmap, [count], -1, (0, 0, 255), 2)
                 x, y, w, h = cv2.boundingRect(count)
                 cv2.putText(visual_heatmap, "Not Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
@@ -86,8 +104,7 @@ try:
         contours_green, _ = cv2.findContours(mask_healthy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for count in contours_green:
             area = cv2.contourArea(count)
-            if area > 800:
-                #Draw topographical border around the shape of the grass
+            if 2000 < area < 250000:
                 cv2.drawContours(visual_heatmap, [count], -1, (0, 255, 0), 2)
                 x, y, w, h = cv2.boundingRect(count)
                 cv2.putText(visual_heatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
@@ -95,7 +112,6 @@ try:
         #HUD
         elapsed = int(time.time() - start_time)
         mean_val = valid_ndvi.mean() if len(valid_ndvi) > 0 else 0.0
-        
         cpu_usage = psutil.cpu_percent()
         ram_usage = psutil.virtual_memory().percent
         overlay = visual_heatmap.copy()
@@ -109,7 +125,7 @@ try:
         sys_text = f"Sys Usage | CPU: {cpu_usage}% | RAM: {ram_usage}%"
         cv2.putText(visual_heatmap, sys_text, (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
         
-        cal_text = f"Live Sensor Calibration: [{dynamic_min:.3f} to {dynamic_max:.3f}]"
+        cal_text = f"Live Sensor Calibration: [{smooth_min:.3f} to {smooth_max:.3f}]"
         cv2.putText(visual_heatmap, cal_text, (10, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
         
         elapsed_exact = time.time() - start_time
@@ -120,8 +136,8 @@ try:
             frame_count = frame_count + 1
         
         if frame_count % 15 == 0: 
-            print(f"Recording... T+{int(elapsed_exact)}s | Scale: {dynamic_min:.3f} to {dynamic_max:.3f}")
-            csv_writer.writerow([int(elapsed_exact), round(mean_val, 4), round(dynamic_min, 3), round(dynamic_max, 3), cpu_usage, ram_usage])
+            print(f"Recording... T+{int(elapsed_exact)}s | Scale: {smooth_min:.3f} to {smooth_max:.3f}")
+            csv_writer.writerow([int(elapsed_exact), round(mean_val, 4), round(smooth_min, 3), round(smooth_max, 3), cpu_usage, ram_usage])
 
 except KeyboardInterrupt:
     print("\nRecording aborted by user!")
