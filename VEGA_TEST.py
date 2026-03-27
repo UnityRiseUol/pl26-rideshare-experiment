@@ -1,4 +1,4 @@
-# Program: VEGA.py
+# Program: VEGA_TEST.py
 # Author:
 # Module:
 # Email:
@@ -11,6 +11,20 @@ from picamera2 import Picamera2
 import time
 import psutil
 import csv 
+from gpiozero import Button, LED, TonalBuzzer
+from gpiozero.tones import Tone
+from time import sleep
+
+#Hardware Configuration
+BUTTON_PIN = 27
+GREEN_LED = 22
+RED_LED = 23
+BUZZER_PIN = 24
+
+button = Button(BUTTON_PIN, pull_up=True) 
+green = LED(GREEN_LED)
+red = LED(RED_LED)
+buzzer = TonalBuzzer(BUZZER_PIN)
 
 print("Initialising VEGA Rideshare Experiment...")
 
@@ -37,9 +51,18 @@ frame_count = 0
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
 smooth_min = None
 smooth_max = None
+error_occurred = False
 
 try:
+    #Start flashing green led while recording
+    green.blink(on_time=0.5, off_time=0.5)
+    
     while (time.time() - start_time) < duration:
+        
+        if button.is_pressed:
+            print("\nPhysical stop button pressed! Gracefully ending recording...")
+            break
+            
         frame = picam2.capture_array()
         if frame.shape[2] == 4:
             frame = frame[:, :, :3].copy()
@@ -66,7 +89,6 @@ try:
             
         #Temporal Smoothing
         if smooth_min is None:
-
             smooth_min = current_min
             smooth_max = current_max
         else:
@@ -120,7 +142,6 @@ try:
         cv2.rectangle(overlay, (0, 0), (640, 60), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.5, visual_heatmap, 0.5, 0, visual_heatmap)
         
-
         status_text = f"VEGA Rideshare Experiment | T+{elapsed}s | Avg NDVI: {mean_val:.4f}"
         cv2.putText(visual_heatmap, status_text, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         
@@ -142,7 +163,11 @@ try:
             csv_writer.writerow([int(elapsed_exact), round(mean_val, 4), round(smooth_min, 3), round(smooth_max, 3), cpu_usage, ram_usage])
 
 except KeyboardInterrupt:
-    print("\nRecording aborted by user!")
+    print("\nRecording stopped by user (Ctrl+C)!")
+    
+except Exception as e:
+    print(f"\nError Occured: {e}")
+    error_occurred = True
 
 finally:
     output.release()
@@ -150,3 +175,19 @@ finally:
     csv_file.close() 
     print(f"VEGA stopped! VEGA.mp4 saved with {frame_count} frames!")
     print("Telemetry saved to VEGA_Telemetry.csv")
+    green.off()
+    red.off()
+    buzzer.stop()
+    
+    if error_occurred:
+        red.on()
+        buzzer.play(Tone("A4"))
+        sleep(3)
+        red.off()
+        buzzer.stop()
+    else:
+        green.on()
+        buzzer.play(Tone("C5"))
+        sleep(3)
+        green.off()
+        buzzer.stop()
