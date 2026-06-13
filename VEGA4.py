@@ -67,30 +67,36 @@ except Exception as e:
 send_uart("VEGA_STARTED")
 
 print("\n--- VEGA IS ARMED AND ON THE PAD ---")
-print("Listening for UART launch trigger or 15-minute fallback...")
+print("Listening for UART launch trigger or 5-minute fallback...")
 
 padStartTime = time.time()
-fallbackLimitDuration = 15 * 60#15 Minutes
+fallbackLimitDuration = 5 * 60
 launchTriggered = False
 
 while not launchTriggered:
-    if ser and ser.in_waiting > 0:
-        incoming_data = ser.readline().decode('utf-8', errors='ignore').strip()
-        if incoming_data != "":
-            print(f"<<< Rx: {incoming_data}")
-            
-        if "START_VEGA" in incoming_data:
-            print("UART LAUNCH COMMAND RECEIVED!")
-            launchTriggered = True
+    try:
+        if ser and ser.in_waiting > 0:
+            incoming_data = ser.readline().decode('utf-8', errors='ignore').strip()
+            if incoming_data != "":
+                print(f"<<< Rx: {incoming_data}")
+                
+            if "START_VEGA" in incoming_data:
+                print("UART LAUNCH COMMAND RECEIVED!")
+                send_uart("VEGA_START_ACKNOWLEDGED")
+                launchTriggered = True
+    except Exception as e:
+        print(f"UART Rx Error on Pad: {e}. Disabling UART listen.")
+        ser = None
 
     timeOnPad = time.time() - padStartTime
     if timeOnPad > fallbackLimitDuration:
-        print("FALLBACK TIMER EXCEEDED (15 MINS). FORCING LAUNCH OVERRIDE!")
-        launch_triggered = True
-
+        print("FALLBACK TIMER EXCEEDED (5 MINS). FORCING LAUNCH OVERRIDE!")
+        send_uart("VEGA_FAILSAFE_LAUNCH_OVERRIDE")
+        launchTriggered = True
     time.sleep(0.1)
 
 try:
+    send_uart("VEGA_INITIALISING_CAMERAS")
     picam2.start_recording(H264Encoder(), "VEGA_Backup_1080p.h264")
     csv_file = open('VEGA_Telemetry.csv', 'w', newline='')
     csv_writer = csv.writer(csv_file)
@@ -98,24 +104,41 @@ try:
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     output = cv2.VideoWriter("VEGA.mp4", fourcc, target_fps, (640, 480))
     
-    #Notify Avionics that VEGA rideshare experiment has successfully started
-    send_uart("VEGA_RECORDING")
+    #Notify over UART that VEGA has started
+    send_uart("VEGA_RECORDING_STARTED")
     
     flightStartTime = time.time()
+    maxFlightDuration = 30 * 60
     frameCount = 0
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
     smoothMin = None
     smoothMax = None
     lastLoggedSecond = -1
+    lastHeartbeat = -1
     flightActive = True
 
     while flightActive:
-        if ser and ser.in_waiting > 0:
-            incoming_data = ser.readline().decode('utf-8', errors='ignore').strip()
-            if "STOP_VEGA" in incoming_data:
-                print("\nUART STOP COMMAND RECEIVED! ENDING FLIGHT REC.")
-                flightActive = False
-                break
+        try:
+            if ser and ser.in_waiting > 0:
+                incoming_data = ser.readline().decode('utf-8', errors='ignore').strip()
+                if "STOP_VEGA" in incoming_data:
+                    print("\nUART STOP COMMAND RECEIVED! ENDING FLIGHT REC.")
+                    send_uart("VEGA_STOP_ACKNOWLEDGED")
+                    flightActive = False
+                    break
+        except Exception as e:
+            print(f"UART Rx Error in Flight: {e}. Disabling UART listen.")
+            ser = None
+                
+        elapsedExactTime = time.time() - flightStartTime
+        elapsed = int(elapsedExactTime)
+        
+        #Failsafe where force stop if maximum flight duration is exceeded
+        if elapsed > maxFlightDuration:
+            print("\nFAILSAFE: MAX FLIGHT DURATION (30 MINS) REACHED. AUTO-STOPPING.")
+            send_uart("VEGA_FAILSAFE_TIMEOUT_STOP")
+            flightActive = False
+            break
 
         rawyuv = picam2.capture_array("lores")
         frame = cv2.cvtColor(rawyuv, cv2.COLOR_YUV2BGR_I420)
@@ -182,8 +205,6 @@ try:
                 cv2.putText(visualHeatmap, "Healthy", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
         #HUD
-        elapsedExactTime = time.time() - flightStartTime
-        elapsed = int(elapsedExactTime)
         meanValue = validNdvi.mean() if len(validNdvi) > 0 else 0.0
         cpuUsage = psutil.cpu_percent()
         ramUsage = psutil.virtual_memory().percent
@@ -205,24 +226,36 @@ try:
             print(f"Flight T+{elapsed}s | Scale: {smoothMin:.3f} to {smoothMax:.3f} | CPU: {cpuUsage}% | RAM: {ramUsage}%")
             csv_writer.writerow([elapsed, round(meanValue, 4), round(smoothMin, 3), round(smoothMax, 3), cpuUsage, ramUsage])
             lastLoggedSecond = elapsed
+            
+        #Send status to LIFTSv2 every 10 seconds
+        if elapsed % 10 == 0 and elapsed > lastHeartbeat:
+            send_uart(f"VEGA_ACTIVE_T+{elapsed}s")
+            lastHeartbeat = elapsed
 
 except Exception as e:
     print(f"\nCRITICAL EXCEPTION CAUGHT: {e}")
     send_uart(f"VEGA_ERROR: {e}")
 
 finally:
+    send_uart("VEGA_SAVING_DATA")
     output.release()
     picam2.stop_recording()
     picam2.stop()
     csv_file.close()
-    
-    #Notify Avionics that data is safe and payload is spinning down
     send_uart("VEGA_SAVED_AND_STOPPED")
     
-    if ser:
-        ser.close()
     print(f"VEGA stopped! VEGA.mp4 saved with {frameCount} frames!")
     
     with open(status_file, "w") as f:
         f.write("FLOWN")
-    print(f"Data saved and lockdown file '{status_file}' written. Mission Complete.")
+    print(f"Data saved and lockdown file '{status_file}' written. VEGA Complete!")
+    
+    #Auto-shutdown failsafe
+    send_uart("VEGA_DATA_SECURE_INITIATING_SHUTDOWN")
+    time.sleep(1)
+    
+    if ser:
+        ser.close()
+        
+    print("Initiating OS Halt to protect SD Card")
+    os.system("sudo shutdown -h now")
