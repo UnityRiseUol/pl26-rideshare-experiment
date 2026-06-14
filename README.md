@@ -1,4 +1,6 @@
 # VEGA: Edge-Computed Computer Vision Real-Time NDVI Rideshare Payload
+![Work in-progress Academic Poster Example](poster.png)
+`*work in-progess academic poster above`
 
 **VEGA (Vegetation Evaluation from Ground to Air)** is a custom-built, real-time computer vision payload intended for the **PL-26** Launch Vehicle Rocket rideshare experiment, developed for the **Unity Rise University of Liverpool Rocket Team** (2025-26 launch).
 
@@ -17,7 +19,7 @@
 
 The VEGA flight software operates autonomously on resource-constrained embedded hardware (Raspberry Pi Zero 2W and modified Raspberry Pi Camera Module 3 No IR) during launch to capture and process real-time environmental telemetry. It provides:
 
-* **Real-Time NDVI Processing:** Calculates the Normalised Difference Vegetation Index dynamically using specific wavelength spectrums from the camera feed.
+* **Real-Time NDVI Processing:** Calculates the Normalied Difference Vegetation Index dynamically using specific wavelength spectrums from the camera feed.
 * **Topographical Contouring:** Utilises custom OpenCV morphological operations to map, isolate and draw bounding boxes around healthy and unhealthy crop zones in real time.
 * **Avionics UART Handshaking:** Two-way serial communication with the LIFTSv2 flight computer for launch triggers, active flight heartbeat pings and safe shutdown verifications.
 * **Aerospace Failsafes:** Built-in launch pad timeouts (5 mins), maximum flight duration limits (30 mins) and automated OS-level shutdown sequences to prevent thermal overload and SD card corruption.
